@@ -84,7 +84,7 @@ class Fp8EinsumOp(base_layer.BaseLayer):
         'output_grad_scale', base_layer.WeightHParams(**scale_args)
     )
 
-  def __call__(self, equation: str, *args: pytypes.JTensor) -> pytypes.JTensor:
+  def __call__(self, equation: str, *args: pytypes.JTensor, use_amax_history=True) -> pytypes.JTensor:
     assert len(args) == 2
     x = args[0]
     k = args[1]
@@ -94,23 +94,27 @@ class Fp8EinsumOp(base_layer.BaseLayer):
         k.dtype == comp_dtype
     ), f'k dtype has to be {comp_dtype}, but got {k.dtype}'
     x = jnp.asarray(x, comp_dtype)
-
+    
     theta = self.theta
-
-    x_qdq = fp8_ops.in_qdq(
-        comp_dtype, x, theta.input_scale, theta.input_amax_history
-    )
-    k_qdq = fp8_ops.in_qdq(
-        comp_dtype, k, theta.kernel_scale, theta.kernel_amax_history
-    )
-    y_qdq = jnp.einsum(
-        equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision
-    )
-    y = fp8_ops.out_qdq(
-        comp_dtype,
-        y_qdq,
-        theta.output_grad_scale,
-        theta.output_grad_amax_history,
-    )
+    if use_amax_history:
+        x_qdq = fp8_ops.in_qdq(
+            comp_dtype, x, theta.input_scale, theta.input_amax_history
+        )
+        k_qdq = fp8_ops.in_qdq(
+            comp_dtype, k, theta.kernel_scale, theta.kernel_amax_history
+        )
+        y_qdq = jnp.einsum(
+            equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision
+        )
+        y = fp8_ops.out_qdq(
+            comp_dtype,
+            y_qdq,
+            theta.output_grad_scale,
+            theta.output_grad_amax_history,
+        )
+    else:
+      x_qdq = fp8_ops.quantize_dequantize(x, jnp.float8_e4m3fn, theta.input_scale, comp_dtype)
+      k_qdq = fp8_ops.quantize_dequantize(k, jnp.float8_e4m3fn, theta.kernel_scale, comp_dtype)
+      y = jnp.einsum(equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision)
 
     return y

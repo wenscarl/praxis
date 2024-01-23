@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """Linear layers."""
-
+import pdb
 from jax import numpy as jnp
 from jax import vmap
 from jax.ad_checkpoint import checkpoint_name
@@ -24,6 +24,7 @@ from praxis import py_utils
 from praxis import pytypes
 from praxis.layers import activations
 from praxis.layers import base_ops
+from praxis.layers import injection
 
 
 NestedMap = py_utils.NestedMap
@@ -86,7 +87,7 @@ class Linear(base_layer.BaseLayer):
     )
     self.create_child('einsum', self.einsum_tpl.clone())
 
-  def __call__(self, inputs: JTensor) -> JTensor:
+  def __call__(self, inputs: JTensor, training: bool=True) -> JTensor:
     """Apply projection to inputs.
 
     Args:
@@ -96,7 +97,13 @@ class Linear(base_layer.BaseLayer):
       Projected inputs.
     """
     ap = self.activation_split_dims_mapping
-    out = self.einsum('...y,yz->...z', inputs, self.theta.w)
+    # pdb.set_trace()
+    einsum_extra_args = {}
+    if self.einsum_tpl.__fn_or_cls__ is injection.fp8_nvidia_gpu.Fp8EinsumOp:
+      # print("xxxxxxxxxx"*50)
+      einsum_extra_args['use_amax_history'] = training
+
+    out = self.einsum('...y,yz->...z', inputs, self.theta.w, **einsum_extra_args)
 
     # Adjust sharding annotation during decoding.
     # TODO(pax): This logic should likely be lifted somewhere else.
