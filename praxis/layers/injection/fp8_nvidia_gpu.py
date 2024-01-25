@@ -46,6 +46,7 @@ class Fp8EinsumOp(base_layer.BaseLayer):
   """Wrapper around jnp.einsum used in standard Pax layers."""
 
   amax_history_length: int = 1024
+  force_eval_mode: bool = False
 
   def setup(self) -> None:
     OVERWRITE_WITH_GRADIENT = (
@@ -84,7 +85,7 @@ class Fp8EinsumOp(base_layer.BaseLayer):
         'output_grad_scale', base_layer.WeightHParams(**scale_args)
     )
 
-  def __call__(self, equation: str, *args: pytypes.JTensor, use_amax_history=True) -> pytypes.JTensor:
+  def __call__(self, equation: str, *args: pytypes.JTensor) -> pytypes.JTensor:
     assert len(args) == 2
     x = args[0]
     k = args[1]
@@ -96,7 +97,11 @@ class Fp8EinsumOp(base_layer.BaseLayer):
     x = jnp.asarray(x, comp_dtype)
     
     theta = self.theta
-    if use_amax_history:
+    if self.do_eval or self.force_eval_mode:
+        x_qdq = fp8_ops.quantize_dequantize(x, jnp.float8_e4m3fn, theta.input_scale, comp_dtype)
+        k_qdq = fp8_ops.quantize_dequantize(k, jnp.float8_e4m3fn, theta.kernel_scale, comp_dtype)
+        y = jnp.einsum(equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision)
+    else:
         x_qdq = fp8_ops.in_qdq(
             comp_dtype, x, theta.input_scale, theta.input_amax_history
         )
@@ -112,9 +117,4 @@ class Fp8EinsumOp(base_layer.BaseLayer):
             theta.output_grad_scale,
             theta.output_grad_amax_history,
         )
-    else:
-      x_qdq = fp8_ops.quantize_dequantize(x, jnp.float8_e4m3fn, theta.input_scale, comp_dtype)
-      k_qdq = fp8_ops.quantize_dequantize(k, jnp.float8_e4m3fn, theta.kernel_scale, comp_dtype)
-      y = jnp.einsum(equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision)
-
     return y

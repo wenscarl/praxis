@@ -37,7 +37,8 @@ class Fp8LinearsTest(test_utils.TestCase):
         quantize_dequantize, scale=jnp.ones((1,)), compute_dtype=jnp.float32
     )
 
-    def run_training(custom_einsum_tpl, expected_shapes):
+    def run(custom_einsum_tpl, expected_shapes=None):
+      is_eval = expected_shapes is None
       p = pax_fiddle.Config(
           linears.Linear,
           name='jax_ffn',
@@ -65,74 +66,26 @@ class Fp8LinearsTest(test_utils.TestCase):
           initial_vars['params']['w'], jnp.float8_e4m3fn
       )
       vars_shapes = jax.tree_util.tree_map(jnp.shape, initial_vars)
-      self.assertEqual(vars_shapes, expected_shapes)
+      if not is_eval:
+        self.assertEqual(vars_shapes, expected_shapes)
 
-      def _train(variables, x):
+      def _fwd(variables, x):
         y = ffn.apply(variables, x)
         loss = y * dy
         return jnp.mean(loss)
 
-      train_fn = jax.jit(jax.value_and_grad(_train, argnums=[0, 1]))
-      outputs, grads = train_fn(initial_vars, inputs)
+      eval_fn = jax.jit(_fwd)
+      if is_eval:
+        context_p = base_layer.JaxContext.HParams(do_eval=True)
+        with base_layer.JaxContext.new_context(hparams=context_p):
+            outputs = eval_fn(initial_vars, inputs)
 
-      return outputs, grads
+        return outputs
+      else:
+        train_fn = jax.jit(jax.value_and_grad(_fwd, argnums=[0, 1]))
+        outputs, grads = train_fn(initial_vars, inputs)
 
-    expected_shapes_original = {
-        'params': {'w': (32, 64)},
-    }
-
-    expected_shapes_new = {
-        'params': {
-            'w': (32, 64),
-            'einsum': {
-                'input_amax_history': (1024,),
-                'input_scale': (1,),
-                'kernel_amax_history': (1024,),
-                'kernel_scale': (1,),
-                'output_grad_amax_history': (1024,),
-                'output_grad_scale': (1,),
-            },
-        }
-    }
-
-    def run_inference(custom_einsum_tpl):
-      p = pax_fiddle.Config(
-          linears.Linear,
-          name='jax_ffn',
-          input_dims=32,
-          output_dims=64,
-      )
-      if custom_einsum_tpl:
-        p.set(einsum_tpl=custom_einsum_tpl)
-
-      ffn = base_layer.instantiate(p)
-      prng_key = jax.random.PRNGKey(seed=123)
-      prng_key, init_key, random_key = jax.random.split(prng_key, 3)
-      inputs = jax.random.uniform(random_key, (16, 32))
-      inputs = cast_to_representable(inputs, jnp.float8_e4m3fn)
-      dy = jax.random.uniform(random_key, (16, 64))
-      dy = cast_to_representable(dy, jnp.float8_e5m2)
-      initial_vars = ffn.init(
-          {
-              'params': init_key,
-              'random': init_key,
-          },
-          inputs,
-      )
-      initial_vars['params']['w'] = cast_to_representable(
-          initial_vars['params']['w'], jnp.float8_e4m3fn
-      )
-      vars_shapes = jax.tree_util.tree_map(jnp.shape, initial_vars)
-
-      def _eval(variables, x):
-        y = ffn.apply(variables, x, training=False)
-        loss = y * dy
-        return jnp.mean(loss)
-
-      eval_fn = jax.jit(_eval)
-      outputs = eval_fn(initial_vars, inputs)
-
-      return outputs
+        return outputs, grads
 
     expected_shapes_original = {
         'params': {'w': (32, 64)},
@@ -152,17 +105,17 @@ class Fp8LinearsTest(test_utils.TestCase):
         }
     }
 
-    output1a, output1b = run_training(None, expected_shapes_original)
+    output1a, output1b = run(None, expected_shapes_original)
     einsum_tpl = pax_fiddle.Config(fp8_ops.Fp8EinsumOp)
-    output2a, output2b = run_training(einsum_tpl, expected_shapes_new)
+    output2a, output2b = run(einsum_tpl, expected_shapes_new)
     dw1, dw2 = output1b[0]['params']['w'], output2b[0]['params']['w']
     dx1, dx2 = output1b[1], output2b[1]
     self.assertAllClose(output1a, output2a)
     self.assertAllClose(dx1, dx1)
     self.assertAllClose(dw1, dw2, rtol=1e-04, atol=1e-04)
 
-    output3a = run_inference(None)
-    output4a = run_inference(einsum_tpl)
+    output3a = run(None)
+    output4a = run(einsum_tpl)
     self.assertAllClose(output3a, output4a)
 
 

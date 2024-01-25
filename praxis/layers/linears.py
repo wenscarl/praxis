@@ -97,13 +97,8 @@ class Linear(base_layer.BaseLayer):
       Projected inputs.
     """
     ap = self.activation_split_dims_mapping
-    # pdb.set_trace()
-    einsum_extra_args = {}
-    if self.einsum_tpl.__fn_or_cls__ is injection.fp8_nvidia_gpu.Fp8EinsumOp:
-      # print("xxxxxxxxxx"*50)
-      einsum_extra_args['use_amax_history'] = training
 
-    out = self.einsum('...y,yz->...z', inputs, self.theta.w, **einsum_extra_args)
+    out = self.einsum('...y,yz->...z', inputs, self.theta.w)
 
     # Adjust sharding annotation during decoding.
     # TODO(pax): This logic should likely be lifted somewhere else.
