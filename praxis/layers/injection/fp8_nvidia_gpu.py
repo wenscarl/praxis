@@ -30,8 +30,6 @@
 
 """Op wrappers to support FP8 GEMMs."""
 
-from functools import partial
-
 from flax.linen import fp8_ops
 from jax import custom_vjp
 from jax import lax
@@ -97,20 +95,22 @@ class Fp8EinsumOp(base_layer.BaseLayer):
 
     theta = self.theta
 
-    x_qdq = fp8_ops.in_qdq(
-        comp_dtype, x, theta.input_scale, theta.input_amax_history
+    dot_general_with_precision = lambda lhs, rhs, dimension_numbers, \
+    precision=None, preferred_element_type=None: fp8_ops._q_dot_dq(
+        lhs,
+        rhs,
+        lhs_scale=theta.input_scale,
+        rhs_scale=theta.kernel_scale,
+        out_grad_scale=theta.output_grad_scale,
+        lhs_amax_history=theta.input_amax_history,
+        rhs_amax_history=theta.kernel_amax_history,
+        out_grad_amax_history=theta.output_grad_amax_history,
+        compute_dtype=k.dtype,
+        dimension_numbers=dimension_numbers,
+        precision=precision,
+        preferred_element_type=preferred_element_type
     )
-    k_qdq = fp8_ops.in_qdq(
-        comp_dtype, k, theta.kernel_scale, theta.kernel_amax_history
-    )
-    y_qdq = jnp.einsum(
-        equation, x_qdq, k_qdq, _dot_general=fp8_ops.dot_general_with_precision
-    )
-    y = fp8_ops.out_qdq(
-        comp_dtype,
-        y_qdq,
-        theta.output_grad_scale,
-        theta.output_grad_amax_history,
-    )
+
+    y = jnp.einsum(equation, x, k, _dot_general=dot_general_with_precision)
 
     return y
