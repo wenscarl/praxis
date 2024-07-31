@@ -1698,6 +1698,9 @@ class DotProductAttention(base_layer.BaseLayer):
       query_proj = self.query(query_vec)
       key_proj = self.key(key_vec)
       value_proj = self.value(value_vec)
+      query_proj = checkpoint_name(query_proj, 'query_proj')
+      key_proj = checkpoint_name(key_proj, 'key_proj')
+      value_proj = checkpoint_name(value_proj, 'value_proj')
 
     if not self.consolidate_rope_key_state:
       self._fprop_update_decode_state('key_state', key_proj)
@@ -1728,14 +1731,20 @@ class DotProductAttention(base_layer.BaseLayer):
     # Apply relative bias.
     # Paper: https://aclanthology.org/N18-2074.pdf.
     if self.relative_bias_tpl:
-      # Create dummy variables for segment_pos if they are none so that
-      # the relative bias layer can infer the shape of the keys and queries.
+      # The relative bias expects the segment positions to be set.
+      # -> Create default segment positions if they are not provided.
       if query_segment_pos is None:
         # shape should be B x T
-        query_segment_pos = jnp.zeros(query_vec.shape[:2], dtype=jnp.int32)
+        query_segment_pos = jnp.repeat(
+            jnp.arange(query_vec.shape[1])[jnp.newaxis],
+            query_vec.shape[0],
+            axis=0,
+        )
       if key_segment_pos is None:
         # shape should be B x S
-        key_segment_pos = jnp.zeros(key_vec.shape[:2], dtype=jnp.int32)
+        key_segment_pos = jnp.repeat(
+            jnp.arange(key_vec.shape[1])[jnp.newaxis], key_vec.shape[0], axis=0
+        )
       relative_bias = self.relative_bias(query_segment_pos, key_segment_pos)
     else:
       relative_bias = None
@@ -2248,14 +2257,20 @@ class DotProductAttentionWithLPB(DotProductAttention):
     # Wraps fn with slicing on args_to_slice and broadcast_args_to_slice.
     def _sliced_fn(layer, args, args_to_slice, broadcast_args_to_slice, states):
       sliced = jax.tree.map(
-          lambda x, d: self._slice_decode_chunk(x, chunk_id, d),
+          lambda x, d: (
+              None if x is None else self._slice_decode_chunk(x, chunk_id, d)
+          ),
           args_to_slice,
           args_time_dims,
+          is_leaf=lambda x: x is None,
       )
       broadcast_sliced = jax.tree.map(
-          lambda x, d: self._slice_decode_chunk(x, chunk_id, d),
+          lambda x, d: (
+              None if x is None else self._slice_decode_chunk(x, chunk_id, d)
+          ),
           broadcast_args_to_slice,
           broadcast_args_time_dims,
+          is_leaf=lambda x: x is None,
       )
       return fn(layer, args, sliced, broadcast_sliced, states)
 

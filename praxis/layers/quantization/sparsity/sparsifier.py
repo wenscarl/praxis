@@ -32,6 +32,7 @@ SPARSITY_METADATA_SUFFIX = '_sparsity_metadata'
 SPARSITY_NZ_SUFFIX = '_sparsity_nz'
 SPARSITY_CONFIG_SUFFIX = '_sparsity_config'
 SPARSITY_PRUNED_VALUE_SUFFIX = '_sparsity_mask_pruned_value'
+
 SparsityType = sparsity_hparams.SparsityType
 SparsityHParams = sparsity_hparams.SparsityHParams
 WeightHParams = base_layer.WeightHParams
@@ -189,6 +190,22 @@ class SparsityBaseLayer(base_layer.BaseLayer):
           var_hparams=sparsity_mask_hp,
           trainable=False,
       )
+    if self.sparsity.weight_params is not None and (
+        self.sparsity.weight_params.pruned_value != 0.0
+        or self.sparsity.weight_params.pruned_value_trainable
+    ):
+      prune_value_hp = WeightHParams(
+          shape=(),
+          init=WeightInit.Constant(
+              scale=self.sparsity.weight_params.pruned_value
+          ),
+          dtype=jnp.float32,
+      )
+      self.create_variable(
+          name=name + SPARSITY_PRUNED_VALUE_SUFFIX,
+          var_hparams=prune_value_hp,
+          trainable=self.sparsity.weight_params.pruned_value_trainable,
+      )
 
   def _create_counter_variables(self):
     """Create variable of num_shot and mask update count."""
@@ -226,7 +243,7 @@ class SparsityBaseLayer(base_layer.BaseLayer):
       )
 
   # TODO(shivaniagrawal): add base layer tests for boundary conditions.
-  def _get_sparsity_mask(self, score, mask, step):
+  def _get_sparsity_mask(self, score, mask, step, input_dtype):
     assert self.sparsity is not None
 
     if self.sparsity.sparsity_type == SparsityType.STRUCTURED_NM:
@@ -235,6 +252,22 @@ class SparsityBaseLayer(base_layer.BaseLayer):
           or self.sparsity.weight_params.prune_rate is None
       ):
         return mask
+      if (
+          sparsity.is_optimized_offset(
+              self.sparsity.order,
+              self.sparsity.weight_params.offset,
+              input_dtype,
+          )
+          and not self.sparsity.block_size
+      ):
+        return sparsity.get_sparsity_mask_optimized_for_offset(
+            score,
+            n_sparsity=self.sparsity.weight_params.prune_rate[0],
+            m_sparsity=self.sparsity.weight_params.prune_rate[1],
+            order=self.sparsity.order,
+            offset=self.sparsity.weight_params.offset,
+        )
+
       return sparsity.get_sparsity_mask(
           score,
           n_sparsity=self.sparsity.weight_params.prune_rate[0],
@@ -330,7 +363,8 @@ class SparsityBaseLayer(base_layer.BaseLayer):
       score = sparsity.compute_score(
           w, score_func=self.sparsity.score, inputs=inputs
       )
-      new_mask = self._get_sparsity_mask(score, mask, step)
+      input_dtype = w.dtype
+      new_mask = self._get_sparsity_mask(score, mask, step, input_dtype)
 
       sad_score = None
       if self.sparsity.track_sad_metric:
@@ -581,12 +615,27 @@ class SparsityBaseLayer(base_layer.BaseLayer):
     if mask.shape != weight.shape:
       mask = jnp.reshape(mask, weight.shape)
 
+    pruned_value = None
+    if (
+        self.sparsity.weight_params.pruned_value != 0.0
+        or self.sparsity.weight_params.pruned_value_trainable
+    ):
+      pruned_value_var_name = name + SPARSITY_PRUNED_VALUE_SUFFIX
+      if self.sparsity.weight_params.pruned_value_trainable:
+        pruned_value = getattr(self.theta, pruned_value_var_name)
+      else:
+        pruned_value = self.get_var(pruned_value_var_name)
+
     if self.sparsity.weight_params.sparse_ste:
       weight, _, _ = sr_ste(
           weight, mask, self.sparsity.weight_params.sparse_ste_weight
       )
     else:
-      weight = sparsity.apply_sparsity(weight, mask)
+      weight = sparsity.apply_sparsity(
+          weight,
+          mask,
+          pruned_value=pruned_value,
+      )
 
     self.update_var('step', step + 1)
 

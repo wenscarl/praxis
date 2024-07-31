@@ -732,7 +732,7 @@ class MultiQueryDotProductAttention(base_layer.BaseLayer):
       new_context_params = base_layer.cur_jax_context().hparams.clone()
     else:
       new_context_params = base_layer.JaxContext.HParams()
-    if not self.is_initializing() and n_sharding is not None:
+    if n_sharding is not None:
       new_context_params.mesh_axes_transpose = {n_sharding: None}
     return base_layer.JaxContext.new_context(hparams=new_context_params)
 
@@ -1325,9 +1325,12 @@ class MultiQueryDotProductAttentionLPB(MultiQueryDotProductAttention):
           args_time_dims,
       )
       broadcast_sliced = jax.tree.map(
-          lambda x, d: self._slice_decode_chunk(x, chunk_id, d),
+          lambda x, d: (
+              None if x is None else self._slice_decode_chunk(x, chunk_id, d)
+          ),
           broadcast_args_to_slice,
           broadcast_args_time_dims,
+          is_leaf=lambda x: x is None,
       )
       return fn(layer, args, sliced, broadcast_sliced, states)
 

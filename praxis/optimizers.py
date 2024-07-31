@@ -168,12 +168,14 @@ def partition_params(
 
 
 def sharded_sgd(
-    learning_rate_fn: optax.Schedule, momentum: float | None, nesterov: bool
+    learning_rate_fn: optax.Schedule,
+    momentum: float | None = None,
+    nesterov: bool = False,
 ) -> ShardedGradientTransformation:
   """A Stochastic Gradient Descent optimiser that supports spmd sharding.
 
   This implements stochastic gradient descent. It also includes support for
-  momentum, and nesterov acceleration, as these are standard practice when
+  momentum and Nesterov acceleration, as these are standard practice when
   using stochastic gradient descent to train deep neural networks.
 
   References:
@@ -182,9 +184,9 @@ def sharded_sgd(
   Args:
     learning_rate_fn: a callable that given the current training step, returns
       the learning rate to apply.
-    momentum: (default `None`), the `decay` rate used by the momentum term, when
-      it is set to `None`, then momentum is not used at all.
-    nesterov (default `False`): whether nesterov momentum is used.
+    momentum: the `decay` rate used by the momentum term; when it is set to
+      `None`, then momentum is not used at all.
+    nesterov: whether Nesterov momentum is used.
 
   Returns:
     A `ShardedGradientTransformation`.
@@ -281,14 +283,26 @@ def sharded_adagrad(learning_rate_fn: optax.Schedule,
 
 
 class _AdamOptState:
+  """Adam optimizer state.
 
-  def __init__(self, *, m, v):
+  Attributes:
+    m: first moment.
+    v: second moment.
+  """
+
+  def __init__(self, *, m: WeightHParams | JTensor, v: WeightHParams | JTensor):
     self.m = m
     self.v = v
 
 
 class _ShardedAdamHelper:
-  """A helper class facilitates the creation of sharded_adam_optimizer."""
+  """A helper class facilitates the creation of sharded_adam_optimizer.
+
+  Attributes:
+    _maybe_inf_to_nan: whether to replace infinite values with NaNs.
+  """
+
+  _maybe_inf_to_nan: bool
 
   def __init__(self, maybe_inf_to_nan: bool = True):
     self._maybe_inf_to_nan = maybe_inf_to_nan
@@ -355,8 +369,13 @@ class _ShardedAdamHelper:
 
 
 class _LionOptState:
+  """Lion optimizer state.
 
-  def __init__(self, *, m):
+  Attributes:
+    m: momentum.
+  """
+
+  def __init__(self, *, m: WeightHParams | JTensor):
     self.m = m
 
 
